@@ -135,7 +135,7 @@ public class DownloadProgressIcon extends View implements NotificationCenter.Not
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         detachCurrentListeners();
-        NotificationCenter.getInstance(currentAccount).addObserver(this, NotificationCenter.onDownloadingFilesChanged);
+        NotificationCenter.getInstance(currentAccount).removeObserver(this, NotificationCenter.onDownloadingFilesChanged);
         downloadImageReceiver.onDetachedFromWindow();
         downloadCompleteImageReceiver.onDetachedFromWindow();
     }
@@ -161,8 +161,13 @@ public class DownloadProgressIcon extends View implements NotificationCenter.Not
             }
         }
         if (currentListeners.size() == 0 && (getVisibility() != View.VISIBLE || getAlpha() != 1f)) {
-            progress = 0;
-            currentProgress = 0;
+            if (DownloadController.getInstance(currentAccount).hasUnviewedDownloads()) {
+                progress = 1f;
+                currentProgress = 1f;
+            } else {
+                progress = 0;
+                currentProgress = 0;
+            }
         }
     }
 

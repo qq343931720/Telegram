@@ -49,6 +49,7 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewOutlineProvider;
+import android.view.WindowManager;
 import android.view.animation.OvershootInterpolator;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -63,6 +64,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.messenger.ApplicationLoader;
+import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.ChatObject;
 import org.telegram.messenger.DialogObject;
 import org.telegram.messenger.FileLog;
@@ -78,6 +80,8 @@ import org.telegram.tgnet.TLRPC;
 import org.telegram.ui.ActionBar.ActionBar;
 import org.telegram.ui.ActionBar.ActionBarMenu;
 import org.telegram.ui.ActionBar.ActionBarMenuItem;
+import org.telegram.ui.ActionBar.ActionBarMenuSubItem;
+import org.telegram.ui.ActionBar.ActionBarPopupWindow;
 import org.telegram.ui.ActionBar.AlertDialog;
 import org.telegram.ui.ActionBar.BaseFragment;
 import org.telegram.ui.ActionBar.Theme;
@@ -173,6 +177,7 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
 
     private ArrayList<LiveLocation> markers = new ArrayList<>();
     private LongSparseArray<LiveLocation> markersMap = new LongSparseArray<>();
+    private long selectedMarkerId = -1;
 
     private ArrayList<VenueLocation> placeMarkers = new ArrayList<>();
 
@@ -212,6 +217,7 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
 
     private final static int open_in = 1;
     private final static int share_live_location = 5;
+    private final static int get_directions = 6;
     private final static int map_list_menu_map = 2;
     private final static int map_list_menu_satellite = 3;
     private final static int map_list_menu_hybrid = 4;
@@ -221,6 +227,8 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
     public final static int LOCATION_TYPE_GROUP = 4;
     public final static int LOCATION_TYPE_GROUP_VIEW = 5;
     public final static int LOCATION_TYPE_LIVE_VIEW = 6;
+
+    private ActionBarPopupWindow popupWindow;
 
     private Runnable markAsReadRunnable;
 
@@ -539,6 +547,8 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
                     }
                 } else if (id == share_live_location) {
                     openShareLiveLocation(0);
+                } else if (id == get_directions) {
+                    openDirections(null);
                 }
             }
         });
@@ -549,6 +559,8 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
         } else if (messageObject != null) {
             if (messageObject.isLiveLocation()) {
                 actionBar.setTitle(LocaleController.getString("AttachLiveLocation", R.string.AttachLiveLocation));
+                otherItem = menu.addItem(0, R.drawable.ic_ab_other);
+                otherItem.addSubItem(get_directions, R.drawable.navigate, LocaleController.getString("GetDirections", R.string.GetDirections));
             } else {
                 if (messageObject.messageOwner.media.title != null && messageObject.messageOwner.media.title.length() > 0) {
                     actionBar.setTitle(LocaleController.getString("SharedPlace", R.string.SharedPlace));
@@ -945,28 +957,30 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
         listView.setAdapter(adapter = new LocationActivityAdapter(context, locationType, dialogId, false, null) {
             @Override
             protected void onDirectionClick() {
-                if (Build.VERSION.SDK_INT >= 23) {
-                    Activity activity = getParentActivity();
-                    if (activity != null) {
-                        if (activity.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-                            showPermissionAlert(true);
-                            return;
+                openDirections(null);
+            }
+
+            private boolean firstSet = true;
+
+            @Override
+            public void setLiveLocations(ArrayList<LiveLocation> liveLocations) {
+                if (messageObject != null && messageObject.isLiveLocation()) {
+                    int otherPeopleLocations = 0;
+                    if (liveLocations != null) {
+                        for (int i = 0; i < liveLocations.size(); ++i) {
+                            LiveLocation loc = liveLocations.get(i);
+                            if (loc != null && !UserObject.isUserSelf(loc.user)) {
+                                otherPeopleLocations++;
+                            }
                         }
                     }
-                }
-                if (myLocation != null) {
-                    try {
-                        Intent intent;
-                        if (messageObject != null) {
-                            intent = new Intent(Intent.ACTION_VIEW, Uri.parse(String.format(Locale.US, "http://maps.google.com/maps?saddr=%f,%f&daddr=%f,%f", myLocation.getLatitude(), myLocation.getLongitude(), messageObject.messageOwner.media.geo.lat, messageObject.messageOwner.media.geo._long)));
-                        } else {
-                            intent = new Intent(Intent.ACTION_VIEW, Uri.parse(String.format(Locale.US, "http://maps.google.com/maps?saddr=%f,%f&daddr=%f,%f", myLocation.getLatitude(), myLocation.getLongitude(), chatLocation.geo_point.lat, chatLocation.geo_point._long)));
-                        }
-                        getParentActivity().startActivity(intent);
-                    } catch (Exception e) {
-                        FileLog.e(e);
+                    if (firstSet && otherPeopleLocations == 1) {
+                        selectedMarkerId = liveLocations.get(0).id;
                     }
+                    firstSet = false;
+                    otherItem.setVisibility(otherPeopleLocations == 1 ? View.VISIBLE : View.GONE);
                 }
+                super.setLiveLocations(liveLocations);
             }
         });
         adapter.setMyLocationDenied(locationDenied);
@@ -993,7 +1007,49 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
             }
         });
         ((DefaultItemAnimator) listView.getItemAnimator()).setDelayAnimations(false);
+        listView.setOnItemLongClickListener((view, position) -> {
+            if (locationType == 2) {
+                Object object = adapter.getItem(position);
+                if (object instanceof LiveLocation) {
+
+                    final LiveLocation location = (LiveLocation) object;
+
+                    ActionBarPopupWindow.ActionBarPopupWindowLayout popupLayout = new ActionBarPopupWindow.ActionBarPopupWindowLayout(context);
+                    ActionBarMenuSubItem cell = new ActionBarMenuSubItem(getParentActivity(), true, true, getResourceProvider());
+                    cell.setMinimumWidth(AndroidUtilities.dp(200));
+                    cell.setTextAndIcon(LocaleController.getString("GetDirections", R.string.GetDirections), R.drawable.navigate);
+                    cell.setOnClickListener(e -> {
+                        openDirections(location);
+                        if (popupWindow != null) {
+                            popupWindow.dismiss();
+                        }
+                    });
+                    popupLayout.addView(cell);
+
+                    popupWindow = new ActionBarPopupWindow(popupLayout, LayoutHelper.WRAP_CONTENT, LayoutHelper.WRAP_CONTENT) {
+                        @Override
+                        public void dismiss() {
+                            super.dismiss();
+                            popupWindow = null;
+                        }
+                    };
+                    popupWindow.setOutsideTouchable(true);
+                    popupWindow.setClippingEnabled(true);
+                    popupWindow.setInputMethodMode(ActionBarPopupWindow.INPUT_METHOD_NOT_NEEDED);
+                    popupWindow.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_UNSPECIFIED);
+
+                    int[] loc = new int[2];
+                    view.getLocationInWindow(loc);
+                    popupWindow.showAtLocation(view, Gravity.TOP, 0, loc[1] - AndroidUtilities.dp(48 + 4));
+                    popupWindow.dimBehind();
+
+                    return true;
+                }
+            }
+            return false;
+        });
         listView.setOnItemClickListener((view, position) -> {
+            selectedMarkerId = -1;
             if (locationType == LOCATION_TYPE_GROUP) {
                 if (position == 1) {
                     TLRPC.TL_messageMediaVenue venue = (TLRPC.TL_messageMediaVenue) adapter.getItem(position);
@@ -1004,7 +1060,7 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
                         delegate.didSelectLocation(venue, LOCATION_TYPE_GROUP, true, 0);
                         finishFragment();
                     } else {
-                        final AlertDialog[] progressDialog = new AlertDialog[]{new AlertDialog(getParentActivity(), 3)};
+                        final AlertDialog[] progressDialog = new AlertDialog[]{new AlertDialog(getParentActivity(), AlertDialog.ALERT_TYPE_SPINNER)};
                         TLRPC.TL_channels_editLocation req = new TLRPC.TL_channels_editLocation();
                         req.address = venue.address;
                         req.channel = getMessagesController().getInputChannel(-dialogId);
@@ -1074,6 +1130,7 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
                     }
                 } else if (object instanceof LiveLocation) {
                     LiveLocation liveLocation = (LiveLocation) object;
+                    selectedMarkerId = liveLocation.id;
                     map.animateCamera(ApplicationLoader.getMapsProvider().newCameraUpdateLatLngZoom(liveLocation.marker.getPosition(), map.getMaxZoomLevel() - 4));
                 }
             }
@@ -1302,6 +1359,41 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
         }
         int color = Theme.getColor(Theme.key_windowBackgroundWhite);
         return AndroidUtilities.computePerceivedBrightness(color) < 0.721f;
+    }
+
+    private void openDirections(LiveLocation location) {
+        double daddrLat, daddrLong;
+        if (location != null && location.object != null) {
+            daddrLat = location.object.media.geo.lat;
+            daddrLong = location.object.media.geo._long;
+        } else if (messageObject != null) {
+            daddrLat = messageObject.messageOwner.media.geo.lat;
+            daddrLong = messageObject.messageOwner.media.geo._long;
+        } else {
+            daddrLat = chatLocation.geo_point.lat;
+            daddrLong = chatLocation.geo_point._long;
+        }
+        String domain;
+        if (BuildVars.isHuaweiStoreApp()) {
+            domain = "mapapp://navigation";
+        } else {
+            domain = "http://maps.google.com/maps";
+        }
+        if (myLocation != null) {
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(String.format(Locale.US, domain + "?saddr=%f,%f&daddr=%f,%f", myLocation.getLatitude(), myLocation.getLongitude(), daddrLat, daddrLong)));
+                getParentActivity().startActivity(intent);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        } else {
+            try {
+                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(String.format(Locale.US, domain + "?saddr=&daddr=%f,%f", daddrLat, daddrLong)));
+                getParentActivity().startActivity(intent);
+            } catch (Exception e) {
+                FileLog.e(e);
+            }
+        }
     }
 
     private void updateEmptyView() {
@@ -1627,6 +1719,9 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
         } else {
             liveLocation.object = message;
             liveLocation.marker.setPosition(latLng);
+            if (selectedMarkerId == liveLocation.id) {
+                map.animateCamera(ApplicationLoader.getMapsProvider().newCameraUpdateLatLng(liveLocation.marker.getPosition()));
+            }
         }
         if (proximitySheet != null) {
             proximitySheet.updateText(true, true);
@@ -1722,6 +1817,8 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
                 showSearchPlacesButton(true);
                 removeInfoView();
 
+                selectedMarkerId = -1;
+
                 if (!scrolling && (locationType == LOCATION_TYPE_SEND || locationType == LOCATION_TYPE_SEND_WITH_LIVE) && listView.getChildCount() > 0) {
                     View view = listView.getChildAt(0);
                     if (view != null) {
@@ -1753,6 +1850,14 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
                 locationButton.setColorFilter(new PorterDuffColorFilter(Theme.getColor(Theme.key_location_actionIcon), PorterDuff.Mode.MULTIPLY));
                 locationButton.setTag(Theme.key_location_actionIcon);
                 userLocationMoved = true;
+            }
+            for (int i = 0; i < markers.size(); ++i) {
+                LiveLocation loc = markers.get(i);
+                if (loc != null && loc.marker == marker) {
+                    selectedMarkerId = loc.id;
+                    map.animateCamera(ApplicationLoader.getMapsProvider().newCameraUpdateLatLngZoom(loc.marker.getPosition(), map.getMaxZoomLevel() - 4));
+                    break;
+                }
             }
             overlayView.addInfoView(marker);
             return true;
@@ -2092,6 +2197,9 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
             if (liveLocation.directionMarker != null) {
                 liveLocation.directionMarker.setPosition(latLng);
             }
+            if (selectedMarkerId == liveLocation.id) {
+                map.animateCamera(ApplicationLoader.getMapsProvider().newCameraUpdateLatLng(liveLocation.marker.getPosition()));
+            }
         }
         if (messageObject == null && chatLocation == null && map != null) {
             IMapsProvider.LatLng latLng = new IMapsProvider.LatLng(location.getLatitude(), location.getLongitude());
@@ -2352,7 +2460,7 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
     @Override
     public void didReceivedNotification(int id, int account, Object... args) {
         if (id == NotificationCenter.closeChats) {
-            removeSelfFromStack();
+            removeSelfFromStack(true);
         } else if (id == NotificationCenter.locationPermissionGranted) {
             locationDenied = false;
             if (adapter != null) {
@@ -2422,6 +2530,9 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
                         liveLocation.object = messageObject.messageOwner;
                         IMapsProvider.LatLng latLng = new IMapsProvider.LatLng(messageObject.messageOwner.media.geo.lat, messageObject.messageOwner.media.geo._long);
                         liveLocation.marker.setPosition(latLng);
+                        if (selectedMarkerId == liveLocation.id) {
+                            map.animateCamera(ApplicationLoader.getMapsProvider().newCameraUpdateLatLng(liveLocation.marker.getPosition()));
+                        }
                         if (liveLocation.directionMarker != null) {
                             IMapsProvider.LatLng oldLocation = liveLocation.directionMarker.getPosition();
                             liveLocation.directionMarker.setPosition(latLng);
@@ -2482,12 +2593,11 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
     }
 
     @Override
-    public void finishFragment(boolean animated) {
+    public boolean finishFragment(boolean animated) {
         if (onCheckGlScreenshot()) {
-            return;
+            return false;
         }
-
-        super.finishFragment(animated);
+        return super.finishFragment(animated);
     }
 
     private boolean onCheckGlScreenshot() {
@@ -2538,7 +2648,7 @@ public class LocationActivity extends BaseFragment implements NotificationCenter
     }
 
     @Override
-    protected void onBecomeFullyHidden() {
+    public void onBecomeFullyHidden() {
         if (undoView[0] != null) {
             undoView[0].hide(true, 0);
         }

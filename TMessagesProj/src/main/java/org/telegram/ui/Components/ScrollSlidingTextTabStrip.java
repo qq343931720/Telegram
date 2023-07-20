@@ -15,8 +15,6 @@ import android.graphics.Color;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.SystemClock;
-import androidx.annotation.Keep;
-
 import android.text.Layout;
 import android.util.SparseArray;
 import android.util.SparseIntArray;
@@ -28,6 +26,8 @@ import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+
+import androidx.annotation.Keep;
 
 import org.telegram.messenger.AndroidUtilities;
 import org.telegram.ui.ActionBar.Theme;
@@ -69,10 +69,10 @@ public class ScrollSlidingTextTabStrip extends HorizontalScrollView {
 
     private GradientDrawable selectorDrawable;
 
-    private String tabLineColorKey = Theme.key_actionBarTabLine;
-    private String activeTextColorKey = Theme.key_actionBarTabActiveText;
-    private String unactiveTextColorKey = Theme.key_actionBarTabUnactiveText;
-    private String selectorColorKey = Theme.key_actionBarTabSelector;
+    private int tabLineColorKey = Theme.key_actionBarTabLine;
+    private int activeTextColorKey = Theme.key_actionBarTabActiveText;
+    private int unactiveTextColorKey = Theme.key_actionBarTabUnactiveText;
+    private int selectorColorKey = Theme.key_actionBarTabSelector;
 
     private CubicBezierInterpolator interpolator = CubicBezierInterpolator.EASE_OUT_QUINT;
 
@@ -338,7 +338,7 @@ public class ScrollSlidingTextTabStrip extends HorizontalScrollView {
         }
     }
 
-    public void setColors(String line, String active, String unactive, String selector) {
+    public void setColors(int line, int active, int unactive, int selector) {
         tabLineColorKey = line;
         activeTextColorKey = active;
         unactiveTextColorKey = unactive;

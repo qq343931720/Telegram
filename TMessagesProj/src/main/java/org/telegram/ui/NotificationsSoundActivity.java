@@ -59,6 +59,7 @@ import org.telegram.ui.Components.ChatAttachAlertDocumentLayout;
 import org.telegram.ui.Components.ChatAvatarContainer;
 import org.telegram.ui.Components.CheckBox2;
 import org.telegram.ui.Components.CombinedDrawable;
+import org.telegram.ui.Components.Forum.ForumUtilities;
 import org.telegram.ui.Components.LayoutHelper;
 import org.telegram.ui.Components.NumberTextView;
 import org.telegram.ui.Components.RadioButton;
@@ -114,6 +115,8 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
 
     private final int tonesStreamType = AudioManager.STREAM_ALARM;
 
+    int topicId = 0;
+
     public NotificationsSoundActivity(Bundle args) {
         this(args, null);
     }
@@ -127,13 +130,15 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
     public boolean onFragmentCreate() {
         if (getArguments() != null) {
             dialogId = getArguments().getLong("dialog_id", 0);
+            topicId = getArguments().getInt("topic_id", 0);
             currentType = getArguments().getInt("type", -1);
         }
         String prefPath;
         String prefDocId;
         if (dialogId != 0) {
-            prefDocId = "sound_document_id_" + dialogId;
-            prefPath = "sound_path_" + dialogId;
+            String key = NotificationsController.getSharedPrefKey(dialogId, topicId);
+            prefDocId = "sound_document_id_" + key;
+            prefPath = "sound_path_" + key;
         } else {
             if (currentType == NotificationsController.TYPE_PRIVATE) {
                 prefPath = "GlobalSoundPath";
@@ -197,7 +202,7 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
                     AlertDialog dialog = builder.show();
                     TextView button = (TextView) dialog.getButton(DialogInterface.BUTTON_POSITIVE);
                     if (button != null) {
-                        button.setTextColor(Theme.getColor(Theme.key_dialogTextRed2, resourcesProvider));
+                        button.setTextColor(Theme.getColor(Theme.key_text_RedBold, resourcesProvider));
                     }
                 } else if (id == shareId) {
                     if (selectedTones.size() == 1) {
@@ -291,9 +296,15 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
             avatarContainer.setOccupyStatusBar(!AndroidUtilities.isTablet());
             actionBar.addView(avatarContainer, 0, LayoutHelper.createFrame(LayoutHelper.WRAP_CONTENT, LayoutHelper.MATCH_PARENT, Gravity.TOP | Gravity.LEFT, !inPreviewMode ? 56 : 0, 0, 40, 0));
             if (dialogId < 0) {
-                TLRPC.Chat chatLocal = getMessagesController().getChat(-dialogId);
-                avatarContainer.setChatAvatar(chatLocal);
-                avatarContainer.setTitle(chatLocal.title);
+                if (topicId != 0) {
+                    TLRPC.TL_forumTopic forumTopic = getMessagesController().getTopicsController().findTopic(-dialogId, topicId);
+                    ForumUtilities.setTopicIcon(avatarContainer.getAvatarImageView(), forumTopic, false, true, resourcesProvider);
+                    avatarContainer.setTitle(forumTopic.title);
+                } else {
+                    TLRPC.Chat chatLocal = getMessagesController().getChat(-dialogId);
+                    avatarContainer.setChatAvatar(chatLocal);
+                    avatarContainer.setTitle(chatLocal.title);
+                }
             } else {
                 TLRPC.User user = getMessagesController().getUser(dialogId);
                 if (user != null) {
@@ -330,7 +341,7 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
         listView.setLayoutManager(new LinearLayoutManager(context));
         listView.setOnItemClickListener((view, position) -> {
             if (position == uploadRow) {
-                chatAttachAlert = new ChatAttachAlert(context, NotificationsSoundActivity.this, false, false, resourcesProvider);
+                chatAttachAlert = new ChatAttachAlert(context, NotificationsSoundActivity.this, false, false, true, resourcesProvider);
                 chatAttachAlert.setSoundPicker();
                 chatAttachAlert.init();
                 chatAttachAlert.show();
@@ -431,7 +442,7 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
     }
 
     private void loadTones() {
-        getMediaDataController().ringtoneDataStore.loadUserRingtones();
+        getMediaDataController().ringtoneDataStore.loadUserRingtones(false);
         serverTones.clear();
         systemTones.clear();
         
@@ -458,9 +469,6 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
         RingtoneManager manager = new RingtoneManager(ApplicationLoader.applicationContext);
         manager.setType(RingtoneManager.TYPE_NOTIFICATION);
         Cursor cursor = manager.getCursor();
-
-
-
 
         Tone noSoundTone = new Tone();
         noSoundTone.stableId = stableIds++;
@@ -506,6 +514,32 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
             selectedToneChanged = true;
         }
         updateRows();
+    }
+
+    public static String findRingtonePathByName(String title) {
+        if (title == null) {
+            return null;
+        }
+
+        try {
+            RingtoneManager manager = new RingtoneManager(ApplicationLoader.applicationContext);
+            manager.setType(RingtoneManager.TYPE_NOTIFICATION);
+            Cursor cursor = manager.getCursor();
+
+            while (cursor.moveToNext()) {
+                String notificationTitle = cursor.getString(RingtoneManager.TITLE_COLUMN_INDEX);
+                String notificationUri = cursor.getString(RingtoneManager.URI_COLUMN_INDEX) + "/" + cursor.getString(RingtoneManager.ID_COLUMN_INDEX);
+
+                if (title.equalsIgnoreCase(notificationTitle)) {
+                    return notificationUri;
+                }
+            }
+        } catch (Throwable e) {
+            // Exception java.lang.NullPointerException: Attempt to invoke interface method 'void android.database.Cursor.registerDataSetObserver(android.database.DataSetObserver)' on a null object reference
+            // ignore
+            FileLog.e(e);
+        }
+        return null;
     }
 
     private void updateRows() {
@@ -697,7 +731,7 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
 
 
             checkBox = new CheckBox2(context, 24, resourcesProvider);
-            checkBox.setColor(null, Theme.key_windowBackgroundWhite, Theme.key_checkboxCheck);
+            checkBox.setColor(-1, Theme.key_windowBackgroundWhite, Theme.key_checkboxCheck);
             checkBox.setDrawUnchecked(false);
             checkBox.setDrawBackgroundAsArc(3);
             addView(checkBox, LayoutHelper.createFrame(26, 26, (LocaleController.isRTL ? Gravity.RIGHT : Gravity.LEFT) | Gravity.CENTER_VERTICAL, (LocaleController.isRTL ? 0 : 18), 0, (LocaleController.isRTL ? 18 : 0), 0));
@@ -830,10 +864,10 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
             String prefDocId;
 
             if (dialogId != 0) {
-                prefName = "sound_" + dialogId;
-                prefPath = "sound_path_" + dialogId;
-                prefDocId = "sound_document_id_" + dialogId;
-                editor.putBoolean("sound_enabled_" + dialogId, true);
+                prefName = "sound_" + NotificationsController.getSharedPrefKey(dialogId, topicId);
+                prefPath = "sound_path_" + NotificationsController.getSharedPrefKey(dialogId, topicId);
+                prefDocId = "sound_document_id_" + NotificationsController.getSharedPrefKey(dialogId, topicId);
+                editor.putBoolean("sound_enabled_" + NotificationsController.getSharedPrefKey(dialogId, topicId), true);
             } else {
                 if (currentType == NotificationsController.TYPE_PRIVATE) {
                     prefName = "GlobalSound";
@@ -872,7 +906,7 @@ public class NotificationsSoundActivity extends BaseFragment implements ChatAtta
 
             editor.apply();
             if (dialogId != 0) {
-                getNotificationsController().updateServerNotificationsSettings(dialogId);
+                getNotificationsController().updateServerNotificationsSettings(dialogId, topicId);
             } else {
                 getNotificationsController().updateServerNotificationsSettings(currentType);
                 getNotificationCenter().postNotificationName(NotificationCenter.notificationsSettingsUpdated);

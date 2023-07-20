@@ -205,6 +205,9 @@ public class HintView extends FrameLayout {
                 if (!messageObject.isOutOwner() && cell.isDrawNameLayout()) {
                     top += AndroidUtilities.dp(20);
                 }
+                if (!messageObject.shouldDrawWithoutBackground() && cell.isDrawTopic()) {
+                    top += AndroidUtilities.dp(5) + cell.getDrawTopicHeight();
+                }
             }
             if (!isTopArrow && top <= getMeasuredHeight() + AndroidUtilities.dp(10)) {
                 return false;
@@ -401,7 +404,7 @@ public class HintView extends FrameLayout {
             }
         }
         setTranslationX(offset);
-        float arrowX = centerX - (leftMargin + offset) - arrowImageView.getMeasuredWidth() / 2;
+        float arrowX = centerX - (leftMargin + offset) - arrowImageView.getMeasuredWidth() / 2f;
         if (currentType == 7) {
             arrowX += AndroidUtilities.dp(2);
         }
@@ -482,8 +485,7 @@ public class HintView extends FrameLayout {
         this.bottomOffset = offset;
     }
 
-    private int getThemedColor(String key) {
-        Integer color = resourcesProvider != null ? resourcesProvider.getColor(key) : null;
-        return color != null ? color : Theme.getColor(key);
+    private int getThemedColor(int key) {
+        return Theme.getColor(key, resourcesProvider);
     }
 }

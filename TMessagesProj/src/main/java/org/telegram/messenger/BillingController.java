@@ -52,8 +52,12 @@ public class BillingController implements PurchasesUpdatedListener, BillingClien
 
     private static BillingController instance;
 
+    public static boolean billingClientEmpty;
+
     private Map<String, Consumer<BillingResult>> resultListeners = new HashMap<>();
     private List<String> requestingTokens = new ArrayList<>();
+    private String lastPremiumTransaction;
+    private String lastPremiumToken;
 
     private Map<String, Integer> currencyExpMap = new HashMap<>();
 
@@ -71,6 +75,14 @@ public class BillingController implements PurchasesUpdatedListener, BillingClien
                 .enablePendingPurchases()
                 .setListener(this)
                 .build();
+    }
+
+    public String getLastPremiumTransaction() {
+        return lastPremiumTransaction;
+    }
+
+    public String getLastPremiumToken() {
+        return lastPremiumToken;
     }
 
     public String formatCurrency(long amount, String currency) {
@@ -118,6 +130,14 @@ public class BillingController implements PurchasesUpdatedListener, BillingClien
         }
     }
 
+    private void switchToInvoice() {
+        if (billingClientEmpty) {
+            return;
+        }
+        billingClientEmpty = true;
+        NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.billingProductDetailsUpdated);
+    }
+
     private void parseCurrencies(JSONObject obj) {
         Iterator<String> it = obj.keys();
         while (it.hasNext()) {
@@ -156,10 +176,10 @@ public class BillingController implements PurchasesUpdatedListener, BillingClien
     }
 
     public void launchBillingFlow(Activity activity, AccountInstance accountInstance, TLRPC.InputStorePaymentPurpose paymentPurpose, List<BillingFlowParams.ProductDetailsParams> productDetails) {
-        launchBillingFlow(activity, accountInstance, paymentPurpose, productDetails, false);
+        launchBillingFlow(activity, accountInstance, paymentPurpose, productDetails, null, false);
     }
 
-    public void launchBillingFlow(Activity activity, AccountInstance accountInstance, TLRPC.InputStorePaymentPurpose paymentPurpose, List<BillingFlowParams.ProductDetailsParams> productDetails, boolean checkedConsume) {
+    public void launchBillingFlow(Activity activity, AccountInstance accountInstance, TLRPC.InputStorePaymentPurpose paymentPurpose, List<BillingFlowParams.ProductDetailsParams> productDetails, BillingFlowParams.SubscriptionUpdateParams subscriptionUpdateParams, boolean checkedConsume) {
         if (!isReady() || activity == null) {
             return;
         }
@@ -167,7 +187,7 @@ public class BillingController implements PurchasesUpdatedListener, BillingClien
         if (paymentPurpose instanceof TLRPC.TL_inputStorePaymentGiftPremium && !checkedConsume) {
             queryPurchases(BillingClient.ProductType.INAPP, (billingResult, list) -> {
                 if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK) {
-                    Runnable callback = () -> launchBillingFlow(activity, accountInstance, paymentPurpose, productDetails, true);
+                    Runnable callback = () -> launchBillingFlow(activity, accountInstance, paymentPurpose, productDetails, subscriptionUpdateParams, true);
 
                     AtomicInteger productsToBeConsumed = new AtomicInteger(0);
                     List<String> productsConsumed = new ArrayList<>();
@@ -205,9 +225,12 @@ public class BillingController implements PurchasesUpdatedListener, BillingClien
             return;
         }
 
-        boolean ok = billingClient.launchBillingFlow(activity, BillingFlowParams.newBuilder()
-                .setProductDetailsParamsList(productDetails)
-                .build()).getResponseCode() == BillingClient.BillingResponseCode.OK;
+        BillingFlowParams.Builder flowParams = BillingFlowParams.newBuilder()
+                .setProductDetailsParamsList(productDetails);
+        if (subscriptionUpdateParams != null) {
+            flowParams.setSubscriptionUpdateParams(subscriptionUpdateParams);
+        }
+        boolean ok = billingClient.launchBillingFlow(activity, flowParams.build()).getResponseCode() == BillingClient.BillingResponseCode.OK;
 
         if (ok) {
             for (BillingFlowParams.ProductDetailsParams params : productDetails) {
@@ -240,7 +263,13 @@ public class BillingController implements PurchasesUpdatedListener, BillingClien
         if (list == null) {
             return;
         }
+        lastPremiumTransaction = null;
         for (Purchase purchase : list) {
+            if (purchase.getProducts().contains(PREMIUM_PRODUCT_ID)) {
+                lastPremiumTransaction = purchase.getOrderId();
+                lastPremiumToken = purchase.getPurchaseToken();
+            }
+
             if (!requestingTokens.contains(purchase.getPurchaseToken())) {
                 for (int i = 0; i < UserConfig.MAX_ACCOUNT_COUNT; i++) {
                     AccountInstance acc = AccountInstance.getInstance(i);
@@ -296,20 +325,28 @@ public class BillingController implements PurchasesUpdatedListener, BillingClien
 
     @Override
     public void onBillingSetupFinished(@NonNull BillingResult setupBillingResult) {
+        FileLog.d("Billing setup finished with result " + setupBillingResult);
         if (setupBillingResult.getResponseCode() == BillingClient.BillingResponseCode.OK) {
             queryProductDetails(Collections.singletonList(PREMIUM_PRODUCT), (billingResult, list) -> {
+                FileLog.d("Query product details finished " + billingResult + ", " + list);
                 if (billingResult.getResponseCode() == BillingClient.BillingResponseCode.OK) {
                     for (ProductDetails details : list) {
                         if (details.getProductId().equals(PREMIUM_PRODUCT_ID)) {
                             PREMIUM_PRODUCT_DETAILS = details;
                         }
                     }
-
-                    AndroidUtilities.runOnUIThread(() -> NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.billingProductDetailsUpdated));
+                    if (PREMIUM_PRODUCT_DETAILS == null) {
+                        switchToInvoice();
+                    } else {
+                        AndroidUtilities.runOnUIThread(() -> NotificationCenter.getGlobalInstance().postNotificationName(NotificationCenter.billingProductDetailsUpdated));
+                    }
+                } else {
+                    switchToInvoice();
                 }
             });
-
             queryPurchases(BillingClient.ProductType.SUBS, this::onPurchasesUpdated);
+        } else {
+            switchToInvoice();
         }
     }
 }
